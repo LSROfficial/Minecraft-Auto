@@ -1,0 +1,163 @@
+[
+  {
+    "name": "游戏崩溃",
+    "rules": [
+      {
+        "regex": "\\[\\d{2}:\\d{2}:\\d{2}\\] \\[.*FATAL\\]:.*",
+        "groups": []
+      },
+      {
+        "regex": ".*(Exception in server tick loop|This crash report has been saved to|---- Minecraft Crash Report ----).*",
+        "groups": []
+      }
+    ]
+  },
+  {
+    "name": "领地邀请",
+    "rules": [
+      {
+        "regex": ".*?(?P<inviter>[\\w\u4e00-\u9fff]{2,16}).*?邀请.*?加入.*?(?P<land_name>[\\w\u4e00-\u9fff\\s·\\-]{2,32}).*?领土",
+        "groups": [
+          "inviter",
+          "land_name"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "领地存钱",
+    "rules": [
+      {
+        "regex": "^\\[CHAT\\]\\s+领土>>\\s+收件箱\\s-\\s领土\\s+(?P<land_name>[^:]+):\\s+玩家\\s+(?P<player>\\w+)\\s+存入了\\s+\\$(?P<in_value>[\\d,]+\\.\\d{2})\\.当前余额:\\s+\\$(?P<now_value>[\\d,]+\\.\\d{2})$",
+        "groups": [
+          "land_name",
+          "player",
+          "in_value",
+          "now_value"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "领地取钱",
+    "rules": [
+      {
+        "regex": "^\\[CHAT\\]\\s+领土>>\\s+收件箱\\s-\\s领土\\s+(?P<land_name>[^:]+):\\s+玩家\\s+(?P<player>\\w+)\\s+取出了\\s+\\$(?P<out_value>[\\d,]+\\.\\d{2})\\.当前余额:\\s+\\$(?P<now_value>[\\d,]+\\.\\d{2})$",
+        "groups": [
+          "land_name",
+          "player",
+          "out_value",
+          "now_value"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "悄悄话",
+    "rules": [
+      {
+        "regex": "(?P<sender>\\w+) 悄悄的对 我 说: (?P<text>.+)",
+        "groups": [
+          "sender",
+          "text"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "消息",
+    "rules": [
+      {
+        "regex": "\\[CHAT\\]\\s*?(?:\\[(?P<server_name>[^\\]]+?)\\]\\s*)?\\[(?P<channel>G|L|交易|RP|国家|[A-Z]{2,})\\]\\s+(?:(?P<tag>[^\\s:]+)\\s+)?(?P<player>[A-Za-z0-9_]{3,16})(?:\\s*[:>]|\\s+说)\\s*(?P<content>.*)$",
+        "groups": [
+          "server_name",
+          "channel",
+          "tag",
+          "player",
+          "content"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "视角同步",
+    "rules": [
+      {
+        "regex": "你的视角已与 (?P<admin_name>\\w+) 同步",
+        "groups": [
+          "admin_name"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "加入",
+    "rules": [
+      {
+        "regex": "(?P<player>\\w+) joined the game",
+        "groups": [
+          "player"
+        ]
+      },
+      {
+        "regex": "(?P<player>\\w+) 加入了游戏",
+        "groups": [
+          "player"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "退出",
+    "rules": [
+      {
+        "regex": "(?P<player>\\w+) left the game",
+        "groups": [
+          "player"
+        ]
+      },
+      {
+        "regex": "(?P<player>\\w+) 退出了游戏",
+        "groups": [
+          "player"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "踢出",
+    "rules": [
+      {
+        "regex": "您已被踢出",
+        "groups": []
+      }
+    ]
+  },
+  {
+    "name": "断开",
+    "rules": [
+      {
+        "regex": ".*(?:Disconnected|连接断开|Timed out|Connection reset|lost connection).*",
+        "groups": []
+      }
+    ]
+  },
+  {
+    "name": "挂机",
+    "rules": [
+      {
+        "regex": "你暂时离开了",
+        "groups": []
+      }
+    ]
+  },
+  {
+    "name": "挂机恢复",
+    "rules": [
+      {
+        "regex": "你回来了",
+        "groups": []
+      }
+    ]
+  }
+]

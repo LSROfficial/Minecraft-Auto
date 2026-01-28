@@ -1,0 +1,22 @@
+[
+  {
+    "comment": "管理员私聊说“V我100”就真给他100",
+    "on": "悄悄话",
+    "when": { "sender": "Kamishirasawa_CN", "text": "re:V我100" },
+    "do": {
+      "cmd": "pay",
+      "args": { "amount": 100 },
+      "chain": [["transfer_to", "Kamishirasawa_CN"]]
+    }
+  },
+  {
+    "comment": "收到任意领地邀请就自动接受",
+    "on": "领地邀请",
+    "when": {},
+    "do": {
+      "cmd": "land",
+      "args": {},
+      "chain": [["handle_invite"], ["accept"]]
+    }
+  }
+]

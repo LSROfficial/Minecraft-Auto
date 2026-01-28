@@ -1,0 +1,30 @@
+{
+  "MINECRAFT": {
+    "GAME_TITLE": "Minecraft* 1.21.8 - 多人游戏（第三方服务器）",
+    "USER_ID": "Kamishirasawa_CN"
+  },
+  "QUEUE_OCR_SETTINGS": {
+    "TESSERACT_CMD": "./tesseract/tesseract.exe",
+    "ROI": [
+      754,
+      894,
+      398,
+      23
+    ]
+  },
+  "SERVER": {
+    "CHAT_CHANNELS": {
+      "交易": "tc",
+      "G": "global",
+      "L": "local",
+      "国家": "nations chat",
+      "RP": "rp"
+    }
+  },
+  "MinecraftLogListener": {
+    "mode": "socket",
+    "enc": "gbk",
+    "host": "127.0.0.1",
+    "port": 25334
+  }
+}

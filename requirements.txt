@@ -1,0 +1,10 @@
+aiofiles==25.1.0
+# AppKit==0.2.8
+loguru==0.7.3
+numpy==2.2.2
+opencv_python==4.12.0.88
+pyautogui==0.9.54
+pyperclip==1.11.0
+pytesseract==0.3.13
+pywin32==311
+rich
