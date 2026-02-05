@@ -14,9 +14,9 @@ DumpFunc = Callable[[Any], str]
 LoadFunc = Callable[[str], Any]
 
 
-class SmartJson:
+class SmartSerializer:
     """
-    增强型 JSON 处理器，支持：
+    增强型 序列化 处理器，支持：
     - 自定义类型序列化/反序列化
     - 后端切换（orjson/ujson/标准库）
     - LRU 缓存加速
@@ -67,7 +67,7 @@ class SmartJson:
     def _init_builtins(self):
         """初始化内置类型注册（线程安全，只执行一次）"""
         with self._lock:
-            if not SmartJson._SERIALIZERS:  # 避免重复注册
+            if not SmartSerializer._SERIALIZERS:  # 避免重复注册
                 for py_type, to_json, from_json in self._BUILTINS:
                     self.register_type(py_type, to_json, from_json)
     
@@ -109,7 +109,7 @@ class SmartJson:
     @staticmethod
     def _get_non_optional_type(tp: Any) -> Any:
         """从 Optional[T] 提取 T"""
-        if SmartJson._is_optional_type(tp):
+        if SmartSerializer._is_optional_type(tp):
             args = get_args(tp)
             return args[0] if args[1] is type(None) else args[1]
         return tp
@@ -130,7 +130,7 @@ class SmartJson:
         
         try:
             # 1. 优先检查注册类型（支持子类）
-            for registered_type, serializer in SmartJson._SERIALIZERS.items():
+            for registered_type, serializer in SmartSerializer._SERIALIZERS.items():
                 if isinstance(value, registered_type):
                     result = serializer(value)
                     # 递归序列化结果（处理自定义类返回的 dict）
@@ -187,8 +187,8 @@ class SmartJson:
         main_type = self._get_non_optional_type(target_type)
         
         # 注册类型优先
-        if main_type in SmartJson._DESERIALIZERS:
-            return SmartJson._DESERIALIZERS[main_type](json_val)
+        if main_type in SmartSerializer._DESERIALIZERS:
+            return SmartSerializer._DESERIALIZERS[main_type](json_val)
         
         # 泛型容器
         origin = get_origin(main_type)
@@ -268,17 +268,17 @@ class SmartJson:
 
 
 # 默认实例（向后兼容）
-_default_instance = SmartJson()
+_default_instance = SmartSerializer()
 
 # 模块级便捷函数（向后兼容）
 def set_backend(dump_func: Optional[DumpFunc] = None, load_func: Optional[LoadFunc] = None, cache_size: int = 128):
     """切换后端并返回新的 SmartJson 实例"""
     global _default_instance
-    _default_instance = SmartJson(dump_func=dump_func, load_func=load_func, cache_size=cache_size)
+    _default_instance = SmartSerializer(dump_func=dump_func, load_func=load_func, cache_size=cache_size)
     return _default_instance
 
 def register_type(*args, **kwargs):
-    return SmartJson.register_type(*args, **kwargs)
+    return SmartSerializer.register_type(*args, **kwargs)
 
 def serialize_value(value: Any, target_type: Any = None) -> Any:
     return _default_instance.serialize(value, target_type)

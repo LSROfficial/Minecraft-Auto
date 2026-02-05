@@ -6,7 +6,7 @@ import os
 import tempfile
 from pathlib import Path
 from typing import Optional, Any
-from .smartjson import serialize_value, deserialize_value
+from .smart_serializer import serialize_value, deserialize_value
 from ..constants import _CONF_FILE
 
 _LOCK = threading.Lock()
