@@ -1,141 +1,293 @@
-
 import json
-from typing import Any, get_origin, get_args, Union
+import threading
+import dataclasses
+from functools import lru_cache
+from typing import Any, get_origin, get_args, Union, Optional, Callable
 from pathlib import Path
 from datetime import datetime, date
 from decimal import Decimal
 from uuid import UUID
-from collections.abc import Mapping
+from collections.abc import Mapping, Set, Sequence
 
-# 注册表
-_SERIALIZERS = {}
-_DESERIALIZERS = {}
+# 类型别名
+DumpFunc = Callable[[Any], str]
+LoadFunc = Callable[[str], Any]
 
-def register_type(py_type, to_json_func=None, from_json_func=None):
+
+class SmartJson:
     """
-    注册自定义类型的序列化/反序列化函数。
-    示例：
-        register_type(MyClass, lambda x: x.to_dict(), lambda d: MyClass.from_dict(d))
+    增强型 JSON 处理器，支持：
+    - 自定义类型序列化/反序列化
+    - 后端切换（orjson/ujson/标准库）
+    - LRU 缓存加速
+    - 循环引用检测
     """
-    if to_json_func:
-        _SERIALIZERS[py_type] = to_json_func
-    if from_json_func:
-        _DESERIALIZERS[py_type] = from_json_func
+    
+    # 类级别的注册表（所有实例共享）
+    _SERIALIZERS: dict[type, Callable[[Any], Any]] = {}
+    _DESERIALIZERS: dict[type, Callable[[Any], Any]] = {}
+    _lock = threading.RLock()
+    
+    # 内置类型注册（类初始化时自动加载）
+    _BUILTINS = [
+        (Path, str, lambda s: Path(s)),
+        (datetime, lambda dt: dt.isoformat(), lambda s: datetime.fromisoformat(s)),
+        (date, lambda d: d.isoformat(), lambda s: date.fromisoformat(s)),
+        (Decimal, str, Decimal),
+        (UUID, str, UUID),
+        (set, list, set),
+        (frozenset, list, frozenset),
+        (tuple, list, tuple),
+        (bytes, lambda b: b.hex(), lambda s: bytes.fromhex(s)),
+    ]
+    
+    def __init__(
+        self,
+        dump_func: Optional[DumpFunc] = None,
+        load_func: Optional[LoadFunc] = None,
+        cache_size: int = 128,
+        detect_cycles: bool = True
+    ):
+        """
+        Args:
+            dump_func: JSON 序列化后端，默认使用标准库 json.dumps
+            load_func: JSON 反序列化后端，默认使用标准库 json.loads
+            cache_size: LRU 缓存大小，0 表示禁用缓存
+            detect_cycles: 是否启用循环引用检测
+        """
+        self._dump = dump_func or json.dumps
+        self._load = load_func or json.loads
+        self._detect_cycles = detect_cycles
+        self._serialize_cache = lru_cache(maxsize=cache_size)(self._serialize_impl) if cache_size > 0 else self._serialize_impl
+        self._deserialize_cache = lru_cache(maxsize=cache_size)(self._deserialize_impl) if cache_size > 0 else self._deserialize_impl
+        
+        # 初始化内置类型注册
+        self._init_builtins()
+    
+    def _init_builtins(self):
+        """初始化内置类型注册（线程安全，只执行一次）"""
+        with self._lock:
+            if not SmartJson._SERIALIZERS:  # 避免重复注册
+                for py_type, to_json, from_json in self._BUILTINS:
+                    self.register_type(py_type, to_json, from_json)
+    
+    @classmethod
+    def register_type(
+        cls,
+        py_type: type,
+        to_json_func: Optional[Callable[[Any], Any]] = None,
+        from_json_func: Optional[Callable[[Any], Any]] = None
+    ) -> None:
+        """
+        注册自定义类型的序列化/反序列化函数
+        
+        Example:
+            SmartJson.register_type(MyClass, lambda x: x.to_dict(), lambda d: MyClass.from_dict(d))
+        """
+        with cls._lock:
+            if to_json_func:
+                cls._SERIALIZERS[py_type] = to_json_func
+            if from_json_func:
+                cls._DESERIALIZERS[py_type] = from_json_func
+    
+    @classmethod
+    def unregister_type(cls, py_type: type) -> None:
+        """注销类型注册"""
+        with cls._lock:
+            cls._SERIALIZERS.pop(py_type, None)
+            cls._DESERIALIZERS.pop(py_type, None)
+    
+    @staticmethod
+    def _is_optional_type(tp: Any) -> bool:
+        """判断是否为 Optional[T]"""
+        origin = get_origin(tp)
+        if origin is Union:
+            args = get_args(tp)
+            return len(args) == 2 and type(None) in args
+        return False
+    
+    @staticmethod
+    def _get_non_optional_type(tp: Any) -> Any:
+        """从 Optional[T] 提取 T"""
+        if SmartJson._is_optional_type(tp):
+            args = get_args(tp)
+            return args[0] if args[1] is type(None) else args[1]
+        return tp
+    
+    def _serialize_impl(self, value: Any, target_type: Any = None, _seen: Optional[set[int]] = None) -> Any:
+        """实际的序列化实现（支持循环引用检测）"""
+        if value is None:
+            return None
+        
+        # 循环引用检测
+        if self._detect_cycles and isinstance(value, (list, tuple, set, frozenset, dict, Mapping)):
+            obj_id = id(value)
+            if _seen is None:
+                _seen = set()
+            if obj_id in _seen:
+                raise ValueError(f"Circular reference detected in object {type(value).__name__}")
+            _seen.add(obj_id)
+        
+        try:
+            # 1. 优先检查注册类型（支持子类）
+            for registered_type, serializer in SmartJson._SERIALIZERS.items():
+                if isinstance(value, registered_type):
+                    result = serializer(value)
+                    # 递归序列化结果（处理自定义类返回的 dict）
+                    return self._serialize_impl(result, None, _seen)
+            
+            # 2. 基础类型直接返回
+            if isinstance(value, (str, int, float, bool)):
+                return value
+            
+            # 3. 处理泛型容器
+            actual_type = target_type or type(value)
+            origin = get_origin(actual_type)
+            
+            if origin in (list, tuple, set, frozenset) or (origin is None and isinstance(value, (Set, Sequence)) and not isinstance(value, (str, bytes))):
+                item_type = get_args(actual_type)[0] if get_args(actual_type) else Any
+                result = [self._serialize_impl(item, item_type, _seen) for item in value]
+                if origin is tuple:
+                    return result  # tuple 存为 list，反序列化时恢复
+                elif origin in (set, frozenset) or isinstance(value, (set, frozenset)):
+                    return result  # set 存为 list
+                return result
+            
+            elif origin is dict or (origin is None and isinstance(value, Mapping)):
+                key_type, val_type = (get_args(actual_type) + (Any, Any))[:2]
+                return {
+                    self._serialize_impl(k, key_type, _seen): self._serialize_impl(v, val_type, _seen)
+                    for k, v in value.items() # type: ignore
+                }
+            
+            # 4. dataclass 支持
+            import dataclasses
+            if dataclasses.is_dataclass(value) and not isinstance(value, type):
+                return self._serialize_impl(dataclasses.asdict(value), dict, _seen)
+            
+            # 5. 普通自定义类：转为 dict
+            if hasattr(value, '__dict__') and not isinstance(value, type):
+                return self._serialize_impl(value.__dict__, dict, _seen)
+            
+            raise TypeError(f"Cannot serialize {value!r} of type {type(value)} (target: {actual_type})")
+        
+        finally:
+            # 清理当前对象的循环引用标记
+            if self._detect_cycles and _seen is not None and isinstance(value, (list, tuple, set, frozenset, dict, Mapping)):
+                _seen.discard(id(value))
+    
+    def _deserialize_impl(self, json_val: Any, target_type: Any) -> Any:
+        """实际的反序列化实现"""
+        if json_val is None:
+            if self._is_optional_type(target_type):
+                return None
+            raise ValueError(f"Non-optional field requires non-null value, got null for type {target_type}")
+        
+        # 处理 Optional[T]
+        main_type = self._get_non_optional_type(target_type)
+        
+        # 注册类型优先
+        if main_type in SmartJson._DESERIALIZERS:
+            return SmartJson._DESERIALIZERS[main_type](json_val)
+        
+        # 泛型容器
+        origin = get_origin(main_type)
+        if origin in (list, tuple, set, frozenset):
+            item_type = get_args(main_type)[0] if get_args(main_type) else Any
+            items = [self._deserialize_impl(item, item_type) for item in json_val]
+            if origin is tuple:
+                return tuple(items)
+            elif origin is frozenset:
+                return frozenset(items)
+            elif origin is set:
+                return set(items)
+            return items
+        
+        elif origin is dict or main_type is dict:
+            key_type, val_type = (get_args(main_type) + (Any, Any))[:2]
+            if not isinstance(json_val, dict):
+                raise ValueError(f"Expected dict, got {type(json_val)} for {main_type}")
+            return {
+                self._deserialize_impl(k, key_type): self._deserialize_impl(v, val_type)
+                for k, v in json_val.items()
+            }
+        
+        # 基础类型
+        if main_type in (str, int, float, bool):
+            if type(json_val) is main_type:
+                return json_val
+            return main_type(json_val)
+        
+        # dataclass 支持
+        if dataclasses.is_dataclass(main_type):
+            if not isinstance(json_val, dict):
+                raise ValueError(f"Expected dict for dataclass {main_type}, got {type(json_val)}")
+            field_types = {f.name: f.type for f in dataclasses.fields(main_type)}
+            kwargs = {
+                k: self._deserialize_impl(v, field_types.get(k, Any))
+                for k, v in json_val.items()
+            }
+            return main_type(**kwargs) # type: ignore
+        
+        # 自定义类：尝试用 dict 初始化
+        if isinstance(main_type, type) and not isinstance(json_val, main_type):
+            if isinstance(json_val, dict):
+                return main_type(**json_val)
+            raise ValueError(f"Cannot construct {main_type} from non-dict value: {json_val}")
+        
+        # 已是目标类型
+        return json_val
+    
+    def serialize(self, value: Any, target_type: Any = None) -> Any:
+        """序列化为 JSON 兼容对象（带缓存）"""
+        return self._serialize_cache(value, target_type, None)
+    
+    def deserialize(self, json_val: Any, target_type: Any) -> Any:
+        """反序列化为 Python 对象（带缓存）"""
+        return self._deserialize_cache(json_val, target_type)
+    
+    def dumps(self, obj: Any, type_hint: Any = None, **kwargs) -> str:
+        """序列化为 JSON 字符串"""
+        serialized = self.serialize(obj, type_hint)
+        return self._dump(serialized, **kwargs) # type: ignore
+    
+    def loads(self, json_str: str, target_type: Any, **kwargs) -> Any:
+        """从 JSON 字符串反序列化"""
+        data = self._load(json_str, **kwargs) # type: ignore
+        return self.deserialize(data, target_type)
+    
+    def dump(self, obj: Any, fp, type_hint: Any = None, **kwargs) -> None:
+        """序列化到文件对象"""
+        serialized = self.serialize(obj, type_hint)
+        json.dump(serialized, fp, **kwargs)
+    
+    def load(self, fp, target_type: Any, **kwargs) -> Any:
+        """从文件对象反序列化"""
+        data = json.load(fp, **kwargs)
+        return self.deserialize(data, target_type)
 
-# 内置类型支持
-register_type(Path, str, lambda s: Path(s))
-register_type(datetime, lambda dt: dt.isoformat(), lambda s: datetime.fromisoformat(s))
-register_type(date, lambda d: d.isoformat(), lambda s: date.fromisoformat(s))
-register_type(Decimal, str, Decimal)
-register_type(UUID, str, UUID)
-register_type(set, list, set)
-register_type(tuple, list, tuple)
 
-def _is_optional_type(tp):
-    """判断是否为 Optional[T]"""
-    origin = get_origin(tp)
-    if origin is Union:
-        args = get_args(tp)
-        return len(args) == 2 and type(None) in args
-    return False
+# 默认实例（向后兼容）
+_default_instance = SmartJson()
 
-def _get_non_optional_type(tp):
-    """从 Optional[T] 提取 T"""
-    if _is_optional_type(tp):
-        args = get_args(tp)
-        return args[0] if args[1] is type(None) else args[1]
-    return tp
+# 模块级便捷函数（向后兼容）
+def set_backend(dump_func: Optional[DumpFunc] = None, load_func: Optional[LoadFunc] = None, cache_size: int = 128):
+    """切换后端并返回新的 SmartJson 实例"""
+    global _default_instance
+    _default_instance = SmartJson(dump_func=dump_func, load_func=load_func, cache_size=cache_size)
+    return _default_instance
+
+def register_type(*args, **kwargs):
+    return SmartJson.register_type(*args, **kwargs)
 
 def serialize_value(value: Any, target_type: Any = None) -> Any:
-    """将 Python 值递归转为 JSON 兼容对象"""
-    if value is None:
-        return None
-
-    # 1. 优先检查注册类型（支持子类）- 修复 Path 被误判为 Mapping 的问题
-    for registered_type, serializer in _SERIALIZERS.items():
-        if isinstance(value, registered_type):
-            return serializer(value)
-
-    # 2. 基础类型直接返回
-    if isinstance(value, (str, int, float, bool)):
-        return value
-
-    # 3. 处理泛型容器
-    actual_type = target_type or type(value)
-    origin = get_origin(actual_type)
-
-    if origin in (list, tuple, set):
-        item_type = get_args(actual_type)[0] if get_args(actual_type) else Any
-        return [serialize_value(item, item_type) for item in value]
-    
-    elif origin is dict:
-        key_type, val_type = (get_args(actual_type) + (Any, Any))[:2]
-        return {
-            serialize_value(k, key_type): serialize_value(v, val_type)
-            for k, v in value.items()
-        }
-
-    # 4. 自定义类：转为 dict
-    if hasattr(value, '__dict__') and not isinstance(value, type):
-        return serialize_value(value.__dict__, dict)
-
-    raise TypeError(f"Cannot serialize {value!r} of type {type(value)} (target: {actual_type})")
+    return _default_instance.serialize(value, target_type)
 
 def deserialize_value(json_val: Any, target_type: Any) -> Any:
-    """根据目标类型，将 JSON 值递归转为 Python 对象"""
-    if json_val is None:
-        if _is_optional_type(target_type):
-            return None
-        raise ValueError(f"Non-optional field requires non-null value, got null for type {target_type}")
+    return _default_instance.deserialize(json_val, target_type)
 
-    # 处理 Optional[T]
-    main_type = _get_non_optional_type(target_type)
-
-    # 注册类型优先
-    if main_type in _DESERIALIZERS:
-        return _DESERIALIZERS[main_type](json_val)
-
-    # 泛型容器
-    origin = get_origin(main_type)
-    if origin in (list, tuple, set):
-        item_type = get_args(main_type)[0] if get_args(main_type) else Any
-        items = [deserialize_value(item, item_type) for item in json_val]
-        if origin is tuple:
-            return tuple(items)
-        elif origin is set:
-            return set(items)
-        else:
-            return items
-    elif origin is dict or main_type is dict:
-        key_type, val_type = (get_args(main_type) + (Any, Any))[:2]
-        if not isinstance(json_val, dict):
-            raise ValueError(f"Expected dict, got {type(json_val)} for {main_type}")
-        return {
-            deserialize_value(k, key_type): deserialize_value(v, val_type)
-            for k, v in json_val.items()
-        }
-
-    # 基础类型
-    if main_type in (str, int, float, bool):
-        if type(json_val) is main_type:
-            return json_val
-        return main_type(json_val)
-
-    # 自定义类：尝试用 dict 初始化
-    if isinstance(main_type, type) and not isinstance(json_val, main_type):
-        if isinstance(json_val, dict):
-            return main_type(**json_val)
-        else:
-            raise ValueError(f"Cannot construct {main_type} from non-dict value: {json_val}")
-
-    # 已是目标类型
-    return json_val
-
-# 方便的顶层函数
 def dumps(obj: Any, type_hint: Any = None, **kwargs) -> str:
-    serialized = serialize_value(obj, type_hint)
-    return json.dumps(serialized, **kwargs)
+    return _default_instance.dumps(obj, type_hint, **kwargs)
 
-def loads(json_str: str, target_type: Any) -> Any:
-    data = json.loads(json_str)
-    return deserialize_value(data, target_type)
+def loads(json_str: str, target_type: Any, **kwargs) -> Any:
+    return _default_instance.loads(json_str, target_type, **kwargs)
