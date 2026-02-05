@@ -51,34 +51,35 @@ def serialize_value(value: Any, target_type: Any = None) -> Any:
     if value is None:
         return None
 
-    # 尝试注册类型
-    value_type = type(value)
-    if value_type in _SERIALIZERS:
-        return _SERIALIZERS[value_type](value)
+    # 1. 优先检查注册类型（支持子类）- 修复 Path 被误判为 Mapping 的问题
+    for registered_type, serializer in _SERIALIZERS.items():
+        if isinstance(value, registered_type):
+            return serializer(value)
 
-    # 推断目标类型（用于容器）
-    actual_type = target_type or value_type
+    # 2. 基础类型直接返回
+    if isinstance(value, (str, int, float, bool)):
+        return value
 
-    # 处理泛型容器
+    # 3. 处理泛型容器
+    actual_type = target_type or type(value)
     origin = get_origin(actual_type)
+
     if origin in (list, tuple, set):
         item_type = get_args(actual_type)[0] if get_args(actual_type) else Any
         return [serialize_value(item, item_type) for item in value]
-    elif origin is dict or (origin is None and isinstance(value, Mapping)):
+    
+    elif origin is dict:
         key_type, val_type = (get_args(actual_type) + (Any, Any))[:2]
         return {
             serialize_value(k, key_type): serialize_value(v, val_type)
             for k, v in value.items()
         }
-    elif origin is None and hasattr(value, '__dict__') and not isinstance(value, type):
-        # 自定义类：转为 dict
+
+    # 4. 自定义类：转为 dict
+    if hasattr(value, '__dict__') and not isinstance(value, type):
         return serialize_value(value.__dict__, dict)
 
-    # 基础类型
-    if isinstance(value, (str, int, float, bool)):
-        return value
-
-    raise TypeError(f"Cannot serialize {value!r} of type {value_type} (target: {actual_type})")
+    raise TypeError(f"Cannot serialize {value!r} of type {type(value)} (target: {actual_type})")
 
 def deserialize_value(json_val: Any, target_type: Any) -> Any:
     """根据目标类型，将 JSON 值递归转为 Python 对象"""
