@@ -5,7 +5,7 @@ import inspect
 import os
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 from .smartjson import serialize_value, deserialize_value
 from ..constants import _CONF_FILE
 
@@ -83,23 +83,13 @@ class ConfigSession:
                     raise
 
 class Inject:
-    def __init__(self, at: Optional[set[str]] = None, config_file: Optional[Path] = None, readonly: bool = False):
+    def __init__(self, at: Optional[set[str]] = None, config_file: Optional[Path] = None):
         self.conf_path = config_file or _CONF_FILE
         self._fields = set(at) if at else None
-        self.readonly = readonly
-
-    def __protect_class(self, need_protect: type) -> None:
-        """ 保护类不被修改 """
-        def protect(name: str, value) -> None:
-            raise AttributeError(f"property {name} cannot set, because this class is read-only.")
-        
-        need_protect.__setattr__ = protect
 
     def __call__(self, cls: type):
         original_init = cls.__init__
         class_key = cls.__qualname__  # 使用完整限定名，如 "MyClass" 或 "Outer.Inner"
-        if self.readonly:
-            self.__protect_class(cls)
 
         def new_init(instance, *args, **kwargs):
             original_init(instance, *args, **kwargs)
